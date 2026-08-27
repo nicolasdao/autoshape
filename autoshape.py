@@ -45,6 +45,7 @@ RUN
 import argparse
 import collections
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -58,7 +59,9 @@ REPO = "nicolasdao/autoshape"
 # GitHub defaults to `main` for new repos but plenty still use `master`, so try
 # both rather than silently failing every update check.
 BRANCHES = ("main", "master")
-RAW = f"https://raw.githubusercontent.com/{REPO}/main"
+# Only used in the "reinstall by hand" fallback message. BRANCHES above is
+# what the code actually probes; this just has to be a URL that resolves.
+RAW = f"https://raw.githubusercontent.com/{REPO}/master"
 CHECK_EVERY = 86400           # seconds between update checks - once a day, at most
 
 PIPE = 2                      # must match shape.sh so the two never fight
@@ -166,6 +169,20 @@ class Display:
 
 # ---------------------------------------------------------------------------
 # version + self-update
+#
+# Two install channels exist and they must never fight:
+#
+#   curl installer -> $PREFIX/lib/autoshape (default /usr/local), self-updating
+#   Homebrew       -> $(brew --prefix)/Cellar/autoshape/..., brew-managed
+#
+# Re-running install.sh on a Homebrew install is actively harmful. On Apple
+# Silicon brew's prefix is /opt/homebrew and comes FIRST on PATH, so the
+# installer writes a second copy into /usr/local that never runs - the update
+# silently does nothing while two copies drift apart. On Intel brew's prefix IS
+# /usr/local, so the installer overwrites brew-managed files in place and the
+# next `brew upgrade` reverts or errors on them.
+#
+# So: detect how we were installed, and route every update path accordingly.
 # ---------------------------------------------------------------------------
 
 def version():
@@ -176,6 +193,41 @@ def version():
             return f.read().strip()
     except OSError:
         return "unknown"
+
+
+def installed_via_homebrew():
+    """True when this copy is managed by Homebrew.
+
+    Checked by path rather than by shelling out to `brew`, so it stays correct
+    for a user who has brew installed but got autoshape from the curl script.
+    Every brew-managed file lives under <prefix>/Cellar/<formula>/<version>/.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    return "/Cellar/autoshape/" in here + "/"
+
+
+def update_command():
+    """The command that actually updates THIS install."""
+    return "brew upgrade autoshape" if installed_via_homebrew() else "sudo autoshape --update"
+
+
+def _parse_version(v):
+    """Semver -> comparable tuple, or None if it isn't a version at all.
+
+    String equality was the old test, and it is wrong in both directions: it
+    calls a local build that is AHEAD of the release an available "update"
+    (offering a downgrade), and it treats the "unknown" fallback as a version.
+    """
+    m = re.match(r"^v?(\d+)\.(\d+)\.(\d+)", (v or "").strip())
+    return tuple(int(g) for g in m.groups()) if m else None
+
+
+def is_newer(latest, current):
+    """True only when `latest` is strictly greater under semver ordering."""
+    lv, cv = _parse_version(latest), _parse_version(current)
+    if lv is None or cv is None:
+        return False
+    return lv > cv
 
 
 def _fetch(path, timeout=4):
@@ -219,19 +271,30 @@ def check_for_update():
         open(stamp, "w").close()
     except OSError:
         pass
-    if latest and latest != version():
+    if is_newer(latest, version()):
         print(f"  {C['yellow']}update available: {version()} -> {latest}{C['reset']}")
-        print(f"  {C['dim']}run: sudo autoshape --update{C['reset']}\n")
+        print(f"  {C['dim']}run: {update_command()}{C['reset']}\n")
 
 
 def self_update():
-    """Re-run the official installer, which fetches the current files."""
-    import urllib.request, subprocess, tempfile
+    """Re-run the official installer, which fetches the current files.
+
+    Refuses outright on a Homebrew install - see the note at the top of this
+    section for why running the installer there corrupts the brew prefix.
+    """
+    import subprocess, tempfile
+
+    if installed_via_homebrew():
+        print("  this copy is managed by Homebrew, so --update would corrupt it.")
+        print("  update it with:")
+        print("      brew update && brew upgrade autoshape")
+        return 1
+
     cur, latest = version(), latest_version()
     if latest is None:
         print("  could not reach GitHub. check your connection and try again.")
         return 1
-    if latest == cur:
+    if not is_newer(latest, cur):
         print(f"  already up to date ({cur}).")
         return 0
     print(f"  updating {cur} -> {latest} ...")

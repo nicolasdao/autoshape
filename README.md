@@ -1,3 +1,5 @@
+![A girl in a cluttered brass workshop ignores a wall of speed gauges — every needle pinned in the green, one draped in cobwebs — and instead times a returning clockwork sparrow with a stopwatch, ear pressed to a listening pipe. Beside her, one plain instrument with its needle well off the rest.](docs/hero.jpg)
+
 # autoshape
 
 **Keeps a tethered hotspot usable while something is uploading.**
@@ -25,6 +27,14 @@ Measured on a 4G MiFi with a large upload running throughout:
 
 macOS only. No dependencies — it uses the Python 3 that macOS already ships.
 
+**Homebrew** — recommended, because `brew upgrade` then keeps it current:
+
+```sh
+brew install nicolasdao/tap/autoshape
+```
+
+**Or the installer**, if you don't use Homebrew:
+
 ```sh
 curl -fsSL https://raw.githubusercontent.com/nicolasdao/autoshape/master/install.sh | sh
 ```
@@ -36,13 +46,17 @@ git clone https://github.com/nicolasdao/autoshape.git
 cd autoshape && ./install.sh
 ```
 
+Pick one. Installing both leaves two copies on your `PATH`, and which one runs
+depends on the order of `/opt/homebrew/bin` and `/usr/local/bin` — confusing in
+exactly the way a tool you run as root should not be.
+
 ## Commands
 
 ```sh
 sudo autoshape              # start it — then press Ctrl-C to stop
 sudo autoshape --off        # clear anything left behind (if it was force-killed)
-autoshape --version         # what you're running
-sudo autoshape --update     # update to the latest release
+autoshape --version         # what you're running (no sudo needed)
+sudo autoshape --update     # update — installer installs only, see Updating
 ```
 
 That's the entire interface. It needs `sudo` because changing packet scheduling
@@ -249,12 +263,19 @@ yourself to zero.
 
 ## Updating
 
-```sh
-autoshape --version
-sudo autoshape --update
-```
+**However you installed it, `autoshape --version` tells you what you have** and
+the daily check tells you the right command for *your* install — you don't have
+to remember which one you used.
 
-Homebrew users: `brew upgrade autoshape`.
+| installed with | update with |
+|---|---|
+| Homebrew | `brew update && brew upgrade autoshape` |
+| the installer | `sudo autoshape --update` |
+
+`autoshape` knows which it is. On a Homebrew copy, `--update` refuses and points
+you at `brew upgrade` rather than running the installer over the top of the brew
+prefix — which would either be silently ignored (Apple Silicon) or overwrite
+brew-managed files (Intel, where the brew prefix *is* `/usr/local`).
 
 It checks GitHub for a newer version **at most once a day** and prints a single
 line if one exists. Never blocks start-up, never sends anything about you. Turn
@@ -293,8 +314,10 @@ it.
 **Uninstall:**
 
 ```sh
-sudo autoshape --off
-sudo rm -rf /usr/local/lib/autoshape /usr/local/bin/autoshape
+sudo autoshape --off                  # first, undo any shaping
+
+brew uninstall autoshape              # if installed with Homebrew
+sudo rm -rf /usr/local/lib/autoshape /usr/local/bin/autoshape   # if installed with the installer
 ```
 
 ---
@@ -314,6 +337,27 @@ python3 tests/test_sensor.py           # the delay sensor itself (~40s)
 Scenarios cover starting above and below capacity, healthy links that must be
 left alone, capacity collapsing and recovering mid-run, idle links, competing
 downloads, and bursty traffic.
+
+---
+
+## Releasing
+
+For maintainers. One command, and both install channels follow:
+
+```sh
+./scripts/release.sh 1.1.0
+```
+
+It bumps `VERSION`, tags and pushes. `.github/workflows/release.yml` then
+publishes the GitHub release, hashes the tarball and pushes the regenerated
+formula to [nicolasdao/homebrew-tap](https://github.com/nicolasdao/homebrew-tap).
+`packaging/autoshape.rb` is the source of truth — the tap copy is generated, so
+never hand-edit it. There is no `sha256` to paste by hand anywhere.
+
+Auth is already configured: an SSH deploy key scoped to `homebrew-tap` alone,
+with its private half stored as the `TAP_DEPLOY_KEY` secret on this repo. It
+never expires. To rotate it, generate a new `ed25519` pair, replace the deploy
+key on `homebrew-tap`, and re-run `gh secret set TAP_DEPLOY_KEY`.
 
 ---
 

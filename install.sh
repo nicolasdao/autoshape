@@ -1,7 +1,7 @@
 #!/bin/sh
 # Install autoshape so it can be run as `sudo autoshape` from anywhere.
 #
-#   curl -fsSL https://raw.githubusercontent.com/nicolasdao/autoshape/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/nicolasdao/autoshape/master/install.sh | sh
 # or, from a clone:
 #   ./install.sh
 set -e

@@ -1,0 +1,111 @@
+# Cut a release from a tag, and update the Homebrew tap to match.
+#
+# The whole point is that shipping a fix is one command:
+#
+#     ./scripts/release.sh 1.1.0
+#
+# ...and both install channels pick it up with no further action. The curl
+# installer reads VERSION off master; Homebrew reads the formula this workflow
+# pushes to nicolasdao/homebrew-tap.
+#
+# SETUP (once, already done): the default GITHUB_TOKEN cannot push to another
+# repository, so pushing to the tap needs its own credential. That credential is
+# an SSH deploy key scoped to nicolasdao/homebrew-tap alone:
+#
+#   public half  -> deploy key on homebrew-tap, read_only=false
+#   private half -> TAP_DEPLOY_KEY secret on this repo
+#
+# Preferred over a PAT because it grants write to exactly one repo and never
+# expires - a fine-grained PAT caps at 1 year, and when it lapses releases fail
+# at the last step, long after anyone remembers why.
+name: release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Derive version from tag
+        id: v
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      # Drift here is the failure mode that matters: a tag saying 1.1.0 next to
+      # a VERSION file saying 1.0.0 means every installed copy reports the wrong
+      # number and the daily update check compares against the wrong value.
+      - name: Check VERSION matches the tag
+        run: |
+          file="$(cat VERSION)"
+          tag="${{ steps.v.outputs.version }}"
+          if [ "$file" != "$tag" ]; then
+            echo "::error::VERSION is '$file' but the tag is 'v$tag'. Bump VERSION and re-tag."
+            exit 1
+          fi
+
+      - name: Run the test suite
+        run: |
+          python3 tests/test_control.py
+          python3 tests/test_control.py --sweep
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "$GITHUB_REF_NAME" --generate-notes --verify-tag
+
+      # Hash the exact URL the formula points at, so the checksum cannot
+      # disagree with what brew downloads. Retried because the archive endpoint
+      # is generated on demand and can 404 for a moment right after tag push.
+      - name: Hash the release tarball
+        id: hash
+        run: |
+          url="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz"
+          for i in 1 2 3 4 5; do
+            curl -fsSL -o release.tar.gz "$url" && break
+            echo "retry $i..."; sleep 5
+          done
+          echo "sha256=$(shasum -a 256 release.tar.gz | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Update the Homebrew tap
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+          SHA256: ${{ steps.hash.outputs.sha256 }}
+          # Passed as an env var rather than interpolated into the script below,
+          # so the secret is never substituted into shell source text.
+          TAP_DEPLOY_KEY: ${{ secrets.TAP_DEPLOY_KEY }}
+        run: |
+          # Held in an agent rather than written to disk. Errors are NOT
+          # suppressed: a key that fails to load here otherwise resurfaces as an
+          # opaque "permission denied" on the clone several lines later.
+          eval "$(ssh-agent -s)" >/dev/null
+          printf '%s\n' "$TAP_DEPLOY_KEY" | ssh-add -
+          mkdir -p ~/.ssh
+          ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
+          export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=yes"
+
+          git clone git@github.com:nicolasdao/homebrew-tap.git tap
+          mkdir -p tap/Formula
+          # packaging/autoshape.rb in THIS repo is the source of truth; the tap
+          # copy is generated, so url/sha256 are rewritten rather than merged.
+          sed -e "s|^  url .*|  url \"https://github.com/nicolasdao/autoshape/archive/refs/tags/v${VERSION}.tar.gz\"|" \
+              -e "s|^  sha256 .*|  sha256 \"${SHA256}\"|" \
+              packaging/autoshape.rb > tap/Formula/autoshape.rb
+          if grep -q "REPLACE_WITH" tap/Formula/autoshape.rb; then
+            echo "::error::placeholder left in formula"; exit 1
+          fi
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/autoshape.rb
+          if git diff --staged --quiet; then
+            echo "tap already up to date"
+            exit 0
+          fi
+          git commit -m "autoshape ${VERSION}"
+          git push
