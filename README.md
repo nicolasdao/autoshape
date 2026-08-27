@@ -95,7 +95,7 @@ this will help. If it doesn't, it won't.
 macOS only — see [Platform support](#platform-support).
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/nicolasdao/autoshape/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/nicolasdao/autoshape/master/install.sh | sh
 ```
 
 Or from a clone:
@@ -261,6 +261,34 @@ links, competing downloads, and bursty traffic.
   The backlog drains at `capacity − limit`, which is physics, not tuning.
 - **`dummynet` is a single FIFO.** Linux's CAKE would do better by letting small
   requests overtake bulk traffic. This gets most of the benefit, not all of it.
+
+---
+
+## Updating
+
+Check what you have:
+
+```sh
+autoshape --version
+```
+
+Update to the latest release:
+
+```sh
+sudo autoshape --update
+```
+
+If you installed via Homebrew, use `brew upgrade autoshape` instead.
+
+autoshape checks GitHub for a newer version **at most once a day** and prints a
+single line if one exists. It never blocks start-up, never fails loudly, and
+never sends anything about you. To turn it off entirely:
+
+```sh
+autoshape --no-update-check
+# or permanently:
+export AUTOSHAPE_NO_UPDATE_CHECK=1
+```
 
 ---
 

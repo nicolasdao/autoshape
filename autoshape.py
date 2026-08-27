@@ -54,6 +54,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from tcpsense import Sensor
 from control import Controller, Config
 
+REPO = "nicolasdao/autoshape"
+# GitHub defaults to `main` for new repos but plenty still use `master`, so try
+# both rather than silently failing every update check.
+BRANCHES = ("main", "master")
+RAW = f"https://raw.githubusercontent.com/{REPO}/main"
+CHECK_EVERY = 86400           # seconds between update checks - once a day, at most
+
 PIPE = 2                      # must match shape.sh so the two never fight
 ANCHOR = "com.apple/shape"
 WIRE_BITS = 1500 * 8 + 240    # MTU plus framing, for serialization compensation
@@ -154,6 +161,95 @@ class Display:
         else:
             print(f"  {word:<10} cap {rate:6.1f} Mbps  used {used:6.1f} ({load*100:3.0f}%)  "
                   f"delay {(delay or 0):5.0f}ms (+{excess:.0f})  {action}")
+
+
+
+# ---------------------------------------------------------------------------
+# version + self-update
+# ---------------------------------------------------------------------------
+
+def version():
+    """Read VERSION from alongside this file. One source of truth, so the
+    installed copy and the repo cannot drift apart."""
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "VERSION")) as f:
+            return f.read().strip()
+    except OSError:
+        return "unknown"
+
+
+def _fetch(path, timeout=4):
+    """Fetch a repo file, trying each candidate branch."""
+    import urllib.request
+    last = None
+    for br in BRANCHES:
+        url = f"https://raw.githubusercontent.com/{REPO}/{br}/{path}"
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as r:
+                return r.read().decode().strip()
+        except Exception as e:
+            last = e
+    raise last
+
+
+def latest_version():
+    try:
+        return _fetch("VERSION")
+    except Exception:
+        return None
+
+
+def check_for_update():
+    """Tell the user once a day if a newer version exists. Never blocks start-up,
+    never fails loudly, and can be turned off entirely.
+
+    Cached so it contacts GitHub at most once per day rather than on every run -
+    a tool that phones home constantly is a tool people stop trusting.
+    """
+    if os.environ.get("AUTOSHAPE_NO_UPDATE_CHECK"):
+        return
+    stamp = "/tmp/.autoshape-update-check"
+    try:
+        if os.path.exists(stamp) and time.time() - os.path.getmtime(stamp) < CHECK_EVERY:
+            return
+    except OSError:
+        pass
+    latest = latest_version()
+    try:
+        open(stamp, "w").close()
+    except OSError:
+        pass
+    if latest and latest != version():
+        print(f"  {C['yellow']}update available: {version()} -> {latest}{C['reset']}")
+        print(f"  {C['dim']}run: sudo autoshape --update{C['reset']}\n")
+
+
+def self_update():
+    """Re-run the official installer, which fetches the current files."""
+    import urllib.request, subprocess, tempfile
+    cur, latest = version(), latest_version()
+    if latest is None:
+        print("  could not reach GitHub. check your connection and try again.")
+        return 1
+    if latest == cur:
+        print(f"  already up to date ({cur}).")
+        return 0
+    print(f"  updating {cur} -> {latest} ...")
+    try:
+        script = _fetch("install.sh", timeout=15)
+        with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False) as f:
+            f.write(script)
+            path = f.name
+        r = subprocess.run(["sh", path])
+        os.unlink(path)
+        if r.returncode == 0:
+            print(f"  updated to {latest}.")
+        return r.returncode
+    except Exception as e:
+        print(f"  update failed: {e}")
+        print(f"  you can always reinstall manually:")
+        print(f"    curl -fsSL {RAW}/install.sh | sh")
+        return 1
 
 
 class Shaper:
@@ -345,7 +441,17 @@ def main():
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--off", action="store_true",
                    help="remove any shaping this tool left behind, and exit")
+    p.add_argument("--version", action="store_true", help="print version and exit")
+    p.add_argument("--update", action="store_true", help="update to the latest release")
+    p.add_argument("--no-update-check", action="store_true",
+                   help="never check GitHub for a newer version")
     a = p.parse_args()
+
+    if a.version:
+        print(f"autoshape {version()}")
+        return
+    if a.update:
+        sys.exit(self_update())
 
     if a.off:
         if os.geteuid() != 0:
@@ -356,6 +462,9 @@ def main():
 
     if os.geteuid() != 0 and not a.dry_run:
         sys.exit("needs root: sudo ./scripts/autoshape.py")
+
+    if not a.no_update_check:
+        check_for_update()
 
     s = Shaper(a)
     def bye(*_):

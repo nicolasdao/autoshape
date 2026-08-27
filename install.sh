@@ -9,7 +9,10 @@ set -e
 PREFIX="${PREFIX:-/usr/local}"
 LIBDIR="$PREFIX/lib/autoshape"
 BINDIR="$PREFIX/bin"
-REPO="https://raw.githubusercontent.com/nicolasdao/autoshape/main"
+GH="https://raw.githubusercontent.com/nicolasdao/autoshape"
+# try main, fall back to master
+REPO="$GH/main"
+curl -fsSL -o /dev/null "$REPO/VERSION" 2>/dev/null || REPO="$GH/master"
 
 case "$(uname -s)" in
   Darwin) ;;
@@ -24,12 +27,12 @@ $SUDO mkdir -p "$LIBDIR" "$BINDIR"
 
 if [ -f "$(dirname "$0")/autoshape.py" ]; then
   SRC="$(cd "$(dirname "$0")" && pwd)"
-  for f in autoshape.py control.py tcpsense.py; do
+  for f in autoshape.py control.py tcpsense.py VERSION; do
     $SUDO cp "$SRC/$f" "$LIBDIR/$f"
   done
 else
   echo "downloading..."
-  for f in autoshape.py control.py tcpsense.py; do
+  for f in autoshape.py control.py tcpsense.py VERSION; do
     $SUDO curl -fsSL "$REPO/$f" -o "$LIBDIR/$f"
   done
 fi
