@@ -206,6 +206,24 @@ def installed_via_homebrew():
     return "/Cellar/autoshape/" in here + "/"
 
 
+def install_prefix():
+    """The PREFIX this copy was installed under, or None if it doesn't look
+    like an install at all (running from a clone, say).
+
+    install.sh lays out <prefix>/lib/autoshape/autoshape.py, so the prefix is
+    two levels up. Deriving it matters because --update re-runs install.sh,
+    which defaults to /usr/local: without this, anyone who installed to a
+    custom prefix gets a SECOND copy in /usr/local on their first update and
+    keeps running the old one.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    parent, libdir = os.path.split(here)
+    prefix, lib = os.path.split(parent)
+    if libdir == "autoshape" and lib == "lib" and prefix:
+        return prefix
+    return None
+
+
 def update_command():
     """The command that actually updates THIS install."""
     return "brew upgrade autoshape" if installed_via_homebrew() else "sudo autoshape --update"
@@ -298,12 +316,21 @@ def self_update():
         print(f"  already up to date ({cur}).")
         return 0
     print(f"  updating {cur} -> {latest} ...")
+    # The installer writes straight to the terminal fd, so without this flush
+    # our buffered line above surfaces AFTER its output and the update reads as
+    # though it happened backwards.
+    sys.stdout.flush()
     try:
         script = _fetch("install.sh", timeout=15)
         with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False) as f:
             f.write(script)
             path = f.name
-        r = subprocess.run(["sh", path])
+        # Reinstall where we already live, not wherever install.sh defaults to.
+        env = dict(os.environ)
+        prefix = install_prefix()
+        if prefix:
+            env["PREFIX"] = prefix
+        r = subprocess.run(["sh", path], env=env)
         os.unlink(path)
         if r.returncode == 0:
             print(f"  updated to {latest}.")
