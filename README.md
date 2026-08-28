@@ -50,6 +50,16 @@ Pick one. Installing both leaves two copies on your `PATH`, and which one runs
 depends on the order of `/opt/homebrew/bin` and `/usr/local/bin` — confusing in
 exactly the way a tool you run as root should not be.
 
+The installer defaults to `/usr/local`. To put it somewhere else:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/nicolasdao/autoshape/master/install.sh \
+  | PREFIX=$HOME/.local sh
+```
+
+`--update` reinstalls into whichever prefix it finds itself in, so you only
+have to say this once. (Homebrew ignores `PREFIX` — it manages its own.)
+
 ## Commands
 
 ```sh
@@ -62,6 +72,12 @@ sudo autoshape --update     # update — installer installs only, see Updating
 That's the entire interface. It needs `sudo` because changing packet scheduling
 is a privileged operation. `Ctrl-C` removes everything it changed and tells you
 so — and nothing survives a reboot either way.
+
+**`sudo` works the same on a Homebrew install** — macOS leaves your `PATH`
+alone under `sudo`, so `sudo autoshape` finds `/opt/homebrew/bin/autoshape`
+normally. (Most Linux distributions *do* restrict it, which is why this is
+worth stating rather than assuming.) If you have hardened `sudoers` with a
+`secure_path` yourself, use `sudo "$(which autoshape)"`.
 
 ---
 
